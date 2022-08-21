@@ -18,8 +18,8 @@ extern IOReturn IOAVServiceWriteI2C(IOAVServiceRef service, uint32_t chipAddress
 #define GREEN 0x18 // VCP Code - Video Gain (Drive): Green
 #define BLUE 0x1A // VCP Code - Video Gain (Drive): Blue
 
-#define DDC_WAIT 10000 // depending on display this must be set to as high as 50000
-#define DDC_ITERATIONS 2 // depending on display this must be set higher
+#define DDC_WAIT 50000 // depending on display this must be set to as high as 50000
+#define DDC_ITERATIONS 3 // depending on display this must be set higher
 
 int main(int argc, char** argv) {
 
@@ -68,6 +68,18 @@ int main(int argc, char** argv) {
     " display n               - Chooses which display to control (use number 1, 2 etc.)\n"
     "\n"
     "You can also use 'l', 'v' instead of 'luminance', 'volume' etc.\n"
+    "\n"
+    "\n"
+    " get XXh                 - Returns current value for op-code XXh (hex, e.g. `get 10h` for luminance)\n"
+    " set XXh n               - Sets value n (decimal) for op-code XXh (hex, e.g. `set 10h 100` for 100%% luminance)\n"
+    " dump 00h                - Returns all values of all op-codes from 00h to FFh - even if not supported for reading (erroneous values possible)\n"
+    "\n"
+    "\n"
+    "Output format:\n"
+    " ADDR=<OPCODE_HEX> VAL=<RESP_4_BYTES>  MH=<RESP_4th_BYTE_DEC> ML=<RESP_3rd_BYTE_DEC> SH=<RESP_2nd_BYTE_DEC> SL=<RESP_1st_BYTE_DEC>  MHMLSHSL=<RESP_IF_4_BYTE_DEC> MLSHSL=<RESP_IF_3_BYTE_DEC> SHSL=<RESP_IF_2_BYTE_DEC> SL=<RESP_IF_1_BYTE_DEC>\n"
+    "Output example:\n"
+    " ADDR=0xdf VAL=0xffff0202  MH=255 ML=255 SH=002 SL=002  MHMLSHSL=4294902274 MLSHSL=16712194 SHSL=00514 SL=002\n"
+    "\n"
     ;
     int returnValue = 1;
 
@@ -183,14 +195,19 @@ int main(int argc, char** argv) {
         else if ( !(strcmp(argv[s+2], "red")) || !(strcmp(argv[s+2], "r")) ) { data[2] = RED; }
         else if ( !(strcmp(argv[s+2], "green")) || !(strcmp(argv[s+2], "g")) ) { data[2] = GREEN; }
         else if ( !(strcmp(argv[s+2], "blue")) || !(strcmp(argv[s+2], "b")) ) { data[2] = BLUE; }
+        else if ( strlen(argv[s+2])==3 && argv[s+2][2]=='h' ) { data[2] = strtol(argv[s+2], argv+s+2+2, 16); }
         else {
 
-            returnText = @"Use 'luminance', 'contrast', 'volume' or 'mute' as second parameter! Enter 'm1ddc help' for help!\n";
+            returnText = @"Use 'XXh', 'luminance', 'contrast', 'volume' or 'mute' as second parameter! Enter 'm1ddc help' for help!\n";
             goto cya;
 
         }
 
-        signed char curValue=-1;
+        UInt32 curValue=0;
+        UInt32 curValue1=0;
+        UInt32 curValue2=0;
+        UInt32 curValue3=0;
+        UInt32 curValue4=0;
         signed char maxValue=-1;
 
         IOReturn err;
@@ -203,6 +220,76 @@ int main(int argc, char** argv) {
         }
 
         // Read stuff
+
+        if ( !(strcmp(argv[s+1], "dump")) ) {
+            for (int vcp=0x00; vcp<=0xff; vcp++){
+                data[0] = 0x82;
+                data[1] = 0x01; 
+                data[2] = vcp; 
+                data[3] = 0x6e ^ data[0] ^ data[1] ^ data[2] ^ data[3];
+    
+                for (int i = 0; i < DDC_ITERATIONS; ++i) {
+    
+                    usleep(DDC_WAIT);
+                    err = IOAVServiceWriteI2C(avService, 0x37, 0x51, data, 4);
+    
+                    if (err) {
+    
+                        returnText = [NSString stringWithFormat:@"I2C communication failure: %s\n", mach_error_string(err)];
+                        goto cya;
+    
+                    }
+    
+                }
+    
+                char i2cBytes[12];
+                memset(i2cBytes, 0, sizeof(i2cBytes));
+    
+                usleep(DDC_WAIT);
+                err = IOAVServiceReadI2C(avService, 0x37, 0x51, i2cBytes, 12);
+    
+                if (err) {
+    
+                    returnText = [NSString stringWithFormat:@"I2C communication failure: %s\n", mach_error_string(err)];
+                    goto cya;
+    
+                }
+    
+                NSData *readData = [NSData dataWithBytes:(const void *)i2cBytes length:(NSUInteger)32];
+
+                NSRange maxValueRange = {7, 1};
+                NSRange currentValueRange = {9, 1};
+                NSRange currentValueRange1 = {9, 1};
+                NSRange currentValueRange2 = {8, 1};
+                NSRange currentValueRange3 = {7, 1};
+                NSRange currentValueRange4 = {6, 1};
+
+                [[readData subdataWithRange:maxValueRange] getBytes:&maxValue length:sizeof(1)];
+                [[readData subdataWithRange:currentValueRange] getBytes:&curValue length:(NSUInteger)32];
+                [[readData subdataWithRange:currentValueRange1] getBytes:&curValue1 length:(NSUInteger)32];
+                [[readData subdataWithRange:currentValueRange2] getBytes:&curValue2 length:(NSUInteger)32];
+                [[readData subdataWithRange:currentValueRange3] getBytes:&curValue3 length:(NSUInteger)32];
+                [[readData subdataWithRange:currentValueRange4] getBytes:&curValue4 length:(NSUInteger)32];
+
+                UInt32 four_byte = (curValue4 << 24) + (curValue3 << 16) + (curValue2 << 8) + curValue1;
+                UInt32 three_byte = (curValue3 << 16) + (curValue2 << 8) + curValue1;
+                UInt32 two_byte = (curValue2 << 8) + curValue1;
+                UInt32 one_byte = curValue1;
+    
+                returnText = [NSString stringWithFormat:
+                    @"ADDR=0x%02x VAL=0x%02x%02x%02x%02x  MH=%03u ML=%03u SH=%03u SL=%03u  MHMLSHSL=%010u MLSHSL=%08u SHSL=%05u SL=%03u  \n", 
+                    data[2], 
+                    curValue4, curValue3, curValue2, curValue1, 
+                    curValue4, curValue3, curValue2, curValue1,
+                    four_byte, three_byte, two_byte, one_byte
+                ];
+
+                [returnText writeToFile:@"/dev/stdout" atomically:NO encoding:NSUTF8StringEncoding error:nil];
+            }
+
+            
+            return 0;
+        }
 
         if ( !(strcmp(argv[s+1], "get")) || !(strcmp(argv[s+1], "max")) || !(strcmp(argv[s+1], "chg")) ) {
 
@@ -237,17 +324,35 @@ int main(int argc, char** argv) {
 
             }
 
-            NSData *readData = [NSData dataWithBytes:(const void *)i2cBytes length:(NSUInteger)11];
+            NSData *readData = [NSData dataWithBytes:(const void *)i2cBytes length:(NSUInteger)32];
 
             NSRange maxValueRange = {7, 1};
             NSRange currentValueRange = {9, 1};
+            NSRange currentValueRange1 = {9, 1};
+            NSRange currentValueRange2 = {8, 1};
+            NSRange currentValueRange3 = {7, 1};
+            NSRange currentValueRange4 = {6, 1};
 
             [[readData subdataWithRange:maxValueRange] getBytes:&maxValue length:sizeof(1)];
-            [[readData subdataWithRange:currentValueRange] getBytes:&curValue length:sizeof(1)];
+            [[readData subdataWithRange:currentValueRange] getBytes:&curValue length:(NSUInteger)32];
+            [[readData subdataWithRange:currentValueRange1] getBytes:&curValue1 length:(NSUInteger)32];
+            [[readData subdataWithRange:currentValueRange2] getBytes:&curValue2 length:(NSUInteger)32];
+            [[readData subdataWithRange:currentValueRange3] getBytes:&curValue3 length:(NSUInteger)32];
+            [[readData subdataWithRange:currentValueRange4] getBytes:&curValue4 length:(NSUInteger)32];
+
+            UInt32 four_byte = (curValue4 << 24) + (curValue3 << 16) + (curValue2 << 8) + curValue1;
+            UInt32 three_byte = (curValue3 << 16) + (curValue2 << 8) + curValue1;
+            UInt32 two_byte = (curValue2 << 8) + curValue1;
+            UInt32 one_byte = curValue1;
 
             if ( !(strcmp(argv[s+1], "get")) ) {
-
-                returnText = [NSString stringWithFormat:@"%i\n", curValue];
+                returnText = [NSString stringWithFormat:
+                    @"ADDR=0x%02x VAL=0x%02x%02x%02x%02x  MH=%03u ML=%03u SH=%03u SL=%03u  MHMLSHSL=%010u MLSHSL=%08u SHSL=%05u SL=%03u  \n", 
+                    data[2], 
+                    curValue4, curValue3, curValue2, curValue1, 
+                    curValue4, curValue3, curValue2, curValue1,
+                    four_byte, three_byte, two_byte, one_byte
+                ];
                 returnValue = 0;
                 goto cya;
 

@@ -4,6 +4,13 @@ This little tool controls external displays (connected via USB-C/DisplayPort Alt
 
 *Please note that controlling a HDMI display via the 2020 M1 Mini's HDMI port is not working. You have to use DisplayPort over USB-C!*
 
+## TODO
+
+- proper CLI argument handling (incl. 3rd param for `dump` that ucrrently does nothing)
+- `DDC_WAIT` and `DDC_ITERATIONS` as CLI arguments
+- output format variations
+- support input values longer than 1 byte and optionally formatted in hex 
+
 ## Prerequisites
 
 You need `clang` from Apple's Command Line Tools (installs automatically if not present).
